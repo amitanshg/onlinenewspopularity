@@ -347,11 +347,4 @@ summary(backward_elimination)   #43 Features Selected #Almost no-change in accur
 
 detach(package:MASS)
 ```
-
-
-
-```{r, echo=TRUE}
-#code 
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Thanks!
