@@ -1,0 +1,357 @@
+---
+title: "Online News Popularity Prediction"
+author: "Amitansh"
+date: "9 July 2016"
+output: pdf_document
+---
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.
+
+###Data Loading and Pre-Processing
+```{r, echo=TRUE}
+raw_data = read.csv("Desktop/OnlineNewsPopularity.csv")
+news_data = read.csv("Desktop/news_data.csv" , header = TRUE)  #contains derived variables 
+
+url = news_data$url 
+timedelta = news_data$timedelta
+
+news_data$url = NULL
+news_data$timedelta = NULL
+
+year_of_publishing = news_data$year
+month_of_year = news_data$month
+
+news_data$year = NULL
+news_data$month = NULL 
+
+weekday = news_data$weekday
+data_channel = news_data$data_channel
+
+news_data$weekday = NULL
+news_data$data_channel = NULL
+
+shares = news_data$shares
+
+backup = news_data
+
+
+#Normalization Not Required
+# library(clusterSim)
+# normalized_data = data.Normalization(news_data, type = "n2" ,normalization = "column")
+# mean(normalized_data$n_tokens_title)
+# 
+# colMeans(normalized_data)
+# rm(normalized_data)
+# We shall directly proceed with visualization and scaling
+```
+
+
+###Raw-Data Visualization 
+```{r, echo=TRUE}
+for(i in 1:ncol(news_data)) { news_data[,i] = as.numeric(news_data[,i]) }
+
+
+par(mfrow = c(2,4))
+for(i in 1:ncol(news_data)) { hist(news_data[,i], xlab = names(news_data[i])) }
+
+
+
+#Correlation Plots
+news_data = cbind(news_data,weekday)
+png("weekday_shares.png",width = 1000, height = 1000,units = "px")
+plot(news_data$weekday, news_data$shares, type = "l", main = "Weekday Vs. Shares",
+     xlab = "Weekday", ylab = "#Shares")
+dev.off()
+
+
+
+news_data = cbind(news_data, data_channel)
+png("datachannel_shares.png",width = 1000, height = 1000,units = "px")
+plot(news_data$data_channel, news_data$shares, type = "p", main = "Data Channel Vs. Shares",
+     xlab = "Data Channel", ylab = "#Shares")
+dev.off()
+
+news_data$data_channel = NULL
+news_data$weekday = NULL
+
+summary(news_data$shares)
+
+```
+As evident from the share summary, 1st Quartile (25%) of the posts are having shares less than 946. Median Shares = 1400 and Mean = 3395. 3rd Quartile (i.e. about 75%) of the  posts have less than 2800 shares and the remaining 25% have all shares > 2800 with a maximum share of 8,43,300
+
+For classification problem, we will take the media value of the shares to say if it is popular or not (ie. weather it will be shared or not) 
+
+Apart from this, the relative importance of the data channel and day of publishing can be seen from the plots. Apparently, it  does not matter which day of the week it is from the popularity aspect. But, <b>Lifestyle</b> and <b>World</b> are surely two of the most popular data channels. 
+
+
+###Feature Relevance Ranking and Feature Selection (Part 1)
+```{r, echo=TRUE}
+#Correlation between predictor variables
+shares = news_data$shares
+news_data$shares = NULL
+
+correlation_matrix = cor(news_data)
+heatmap(correlation_matrix)
+
+#Clustering the variables with maximum correlation together 
+hierarchical_cluster <- hclust(dist(correlation_matrix))
+par(mfrow=c(1,1))
+plot(hierarchical_cluster)
+
+
+news_data = cbind(news_data,shares)
+
+```
+
+Here, it is pretty much evident that some of the features have notable correlation with others which can lead to problem of multicolinearity, we shall 
+
+
+###Predicting weather it will be shared or not! Classification into Popular/UnPopular 
+```{r, echo=TRUE}
+#Scaling the variable
+backup = news_data
+
+for(i in 1:58){ 
+  news_data[,i] <- scale(news_data[,i], center = TRUE, scale = TRUE)
+}
+
+#Converting into Binary Output needed for Classification 
+for(i in 1:nrow(news_data)){
+  if(news_data$shares[i] >1400){news_data$shares[i] =1}
+  else {news_data$shares[i]=0}
+}
+
+#Splitting into Test/Train
+set.seed(123) 
+train_index = sample(seq_len(nrow(news_data)),size = as.integer(0.7*nrow(news_data)), replace = FALSE) 
+
+class(news_data$shares) 
+news_data$shares = as.factor(as.integer(news_data$shares))
+train_data = news_data[train_index,]
+test_data = news_data[-train_index,]
+
+```
+
+We used sampling to select our random set of data from the master_dataset, we can choose to sample, with or without replacement, in our case, we are sampling without replacement. 
+A brief on sampling with and without replacement can be found here:
+https://www.ma.utexas.edu/users/parker/sampling/repl.htm
+
+###Decision Trees
+```{r, echo=TRUE}
+
+# Second Iteration Changes
+# train_data = train_1 
+# test_data = test_1
+
+#Decision Trees using rpart
+library(rpart)
+library(caret)
+decision_tree =rpart(shares~.,data=train_data,control=rpart.control(minsplit = 10,cp = 0.001))
+#Minimum #observations to split = 10  & split should decrease cross-validation error by atleast 0.001
+#Parameters can be fine tuned! (Scope of reduction in misclassification)
+
+str(decision_tree)
+print(decision_tree)
+
+print(decision_tree$variable.importance)
+plot(decision_tree,uniform = T , compress = T)
+text(decision_tree, use.n=TRUE, all=TRUE)
+dev.off()
+
+#Better Tree Visualization
+#install.packages("rpart.plot")
+library(rpart.plot)
+
+#exporting the plot
+png("decision_tree.png", width = 1000, height = 1000 )
+rpart.plot::prp(decision_tree)
+dev.off()
+
+
+class(test_data$shares)
+# Tree Performance and Results 
+predicted_results = predict(decision_tree, test_data , type = "class")
+results = cbind(test_data, predicted_results)
+
+class_imbalance = vector()
+for(i in 1:nrow(results)){
+  class_imbalance[i] = abs(as.integer(results$shares[i]) - as.integer(results$predicted_results[i]))
+}
+
+results = cbind(results,class_imbalance)
+sum(class_imbalance)  #4217
+nrow(results) #11,894
+
+Accuracy = 1- sum(class_imbalance)/nrow(results) #65% Accuracy! #35% Misclassification Error 
+
+#Confusion Matrix, Precision, Accuracy and Recall Scores (PAR Scores)
+print(table(predicted_results,test_data$shares))
+confusionMatrix(predicted_results, test_data$shares)
+
+write.csv(results,"decision_tree_results.csv") #Exporting the DT results. 
+```
+
+
+###K Nearest Neighbors 
+```{r, echo=TRUE}
+#K- Nearest Neighbors 
+#class(test_data$shares) #should be a factor 
+knn_classifier = knn3(shares ~. , train_data)
+knn_classifier_prediction = predict(knn_classifier, test_data, type = "class")
+
+knn_results = cbind(test_data, knn_classifier_prediction)
+knn_class_imbalance = vector()
+for(i in 1:nrow(knn_results)){
+  knn_class_imbalance[i] = abs(as.integer(knn_results$shares[i]) - as.integer(knn_results$knn_classifier_prediction[i]))
+}
+knn_results = cbind(knn_results, knn_class_imbalance)
+sum(knn_class_imbalance) #5199 
+nrow(knn_results) #11,894 
+print(table(knn_classifier_prediction,test_data$shares))
+
+Accuracy = 1- sum(knn_class_imbalance)/nrow(results) #56.3% Accuracy, Justified since KNN is a weak classifier 
+#Confusion Matrix and PAR Scores
+confusionMatrix(knn_classifier_prediction, test_data$shares)
+```
+
+
+### Random Forest Classifier
+```{r, echo=TRUE}
+library(randomForest)
+#Computationally Intensive (5 Mins)
+rf_classifier = randomForest(shares ~., train_data, ntree = 500, replace = T)
+
+png("random_forest_classifier3.png", width = 1000 , height = 1000 )
+plot(rf_classifier)
+dev.off()
+
+summary(rf_classifier)
+feature_relevance = importance(rf_classifier)
+#View(feature_relevance)
+
+ranked_features = feature_relevance[order(feature_relevance[,1] , decreasing = T),]
+class(ranked_features)
+ranked_features =  as.matrix(ranked_features)
+
+write.csv(ranked_features , "feature_ranking_classification.csv")
+#getwd()
+#RF Performance
+rf_prediction = predict(rf_classifier,test_data, type = "class")
+confusionMatrix(rf_prediction, test_data$shares) #67% Accuracy 
+```
+
+As evident from the results matrix, we are getting an intitial accuracy of about <b>67%</b> in predicting weather the news article will be shared or not, we will now try to improve the accuracy and optimize the algorithm to perform better using <b>variable selection and boosting.</b> We shall also try various other classification algorithms like SVM, Naive Bayes and Logistic Regression to see if they improve the accuracy and results. 
+
+###Feature Relevance Ranking and Feature Selection (Part 2)
+```{r, echo=TRUE}
+#Variable Selection after intital kitchen-sink model testing 
+
+#Principal Component Analysis
+feature_set = news_data[,-c(ncol(news_data))]
+cormat <- cor(feature_set)
+
+ev_decomposition = svd(feature_set)
+principal_components = prcomp(feature_set, center = T, scale. = T)
+print(principal_components)
+
+png("principal_components.png" , height = 1000, width = 1000)
+plot(principal_components, type = "l")
+dev.off()
+
+summary(principal_components)
+
+# log_data = log(feature_set)
+# popularity = news_data$shares
+# predict(principal_components,test_data)
+
+#Feature Relevance by Boruta Algorithm (Can also use mRMR algorithm alternatively)
+#Computationally Intensive (Estimated Time to Run > 6 Hr) #ran it for 6 hr and then gave up 
+#install.packages("Boruta")
+# library(Boruta)
+# 
+# set.seed(123)
+# boruta_train = Boruta(shares ~.,train_data)
+# print(boruta_train)
+# 
+# getSelectedAttributes(boruta_train)
+# boruta_results = attStats(boruta_train)
+# class(boruta_train)
+# print(boruta_train)
+```
+Since, there is very little increase in cumulative proportion of variance after adding each principal component, which might be because there is not enough correlation between the features(most of them needs to be used). PCA is not dramatically reducing the number of features, Hence, we will not use it. 
+We shall, however try with 2 permutations of <b>Boruta Algo</b>. One with only "Confirmed Important Attributes" and one while removing "Confirmed Unimportant Attributes".
+Removing day of publishing and data_channel features as they are confirmed unimportant! 
+
+
+```{r, echo=TRUE}
+#New Test and Train Data while removing confirmed unimportant features
+train_1=train_data[ , -c(12:17, 30:37)]
+test_1= test_data[ ,-c(12:17, 30:37)]
+
+#Results and Performance after Variable Selection 
+#Decision Trees Accuracy = 63.3%
+
+#KNN Accuracy = 59%
+
+#Random Forest Accuracy = 65%
+```
+Variable selection does not improve accuracy level, but increases the performance for KNN as there are less features which can lead to stronger similarity and smaller distance. 
+
+#Part 2 - Predicting the Number of Shares 
+
+###Regression for Predicting No. of Shares 
+```{r, echo=TRUE}
+#Few Key Observations:
+#Features Largely Uncorrelated (as seen in the heat map): no problem of multi-collinearity and no need for calculating VIF
+#Reassigning Original Shares to the news_data
+#News Data is already scaled
+news_data$shares = log(shares) #Scaling the label  
+class(news_data$shares)
+news_data$shares = as.numeric(news_data$shares)
+
+train_data = news_data[train_index,]
+test_data = news_data[-train_index,]
+
+#Kitchen-Sink Model
+#Multiple Linear Regression
+library(MASS)
+regression_model = lm(shares ~., data = train_data)
+summary(regression_model) #R Squared= 0.127 Adjusted R Squared = 0.125
+
+#removing features with NA coefficient value 
+train_1=train_data[ , !names(train_data) %in% c("is_weekend","weekday_is_sunday")]
+test_1= test_data[ ,!names(test_data) %in% c("is_weekend","weekday_is_sunday")]
+
+#Visualizing the results
+par(mfrow = c(2,2))
+plot(regression_model)
+
+regression_results = predict(regression_model, test_data)
+regression_results = cbind(test_data,regression_results)
+
+
+#Feature Selection (Forward Selection and Backward Elimination)
+
+regression_model = lm(shares ~., data = train_1)
+
+#Forward Selection 
+forward_selection = step(lm(shares ~ 1, data = train_1),scope = formula(regression_model), direction = "forward")
+summary(forward_selection)
+
+#Backward Elmination 
+backward_elimination = step(lm(shares ~., data = train_1), direction = "backward")
+summary(backward_elimination)   #43 Features Selected #Almost no-change in accuracy
+
+
+detach(package:MASS)
+```
+
+
+
+```{r, echo=TRUE}
+#code 
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
